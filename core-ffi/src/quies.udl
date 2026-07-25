@@ -1,0 +1,69 @@
+namespace quies {
+    [Throws=QuiesError]
+    string generate_salt_b64();
+
+    [Throws=QuiesError]
+    string derive_key_b64(string password, string salt_b64, u32 memory_kib, u32 iterations, u32 parallelism);
+
+    [Throws=QuiesError]
+    string encrypt_b64(string key_b64, bytes plaintext, bytes aad);
+
+    [Throws=QuiesError]
+    bytes decrypt_b64(string key_b64, string ciphertext_b64, bytes aad);
+
+    [Throws=QuiesError]
+    CreateVaultResult create_vault(string password);
+
+    [Throws=QuiesError]
+    UnlockVaultResult unlock_vault(string manifest_json, string index_enc_b64, string password);
+
+    [Throws=QuiesError]
+    string generate_password(u32 length, boolean uppercase, boolean lowercase, boolean numbers, boolean symbols);
+
+    u8 check_strength(string password);
+
+    [Throws=QuiesError]
+    string generate_totp(string secret_base32, u64 time_step_seconds, u64 current_unix_time, u32 digits);
+
+    [Throws=QuiesError]
+    BreachHashParts get_breach_hash_parts(string password);
+
+    [Throws=QuiesError]
+    string search_index(string index_json, string term);
+
+    [Throws=QuiesError]
+    string merge_indexes(string local_json, string remote_json);
+
+    [Throws=QuiesError]
+    PkcePair generate_pkce();
+};
+
+[Error]
+interface QuiesError {
+    DecryptionFailed();
+    VaultLocked();
+    NotFound(string id);
+    UnsupportedVersion(u32 version);
+    InvalidFormat(string message);
+};
+
+dictionary CreateVaultResult {
+    string manifest_json;
+    string index_enc_b64;
+    string key_b64;
+};
+
+dictionary UnlockVaultResult {
+    string index_json;
+    string key_b64;
+};
+
+dictionary BreachHashParts {
+    string prefix;
+    string suffix;
+};
+
+dictionary PkcePair {
+    string code_verifier;
+    string code_challenge;
+};

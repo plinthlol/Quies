@@ -1,0 +1,20 @@
+[package]
+name = "quies-core-ffi"
+version = "0.1.0"
+edition = "2021"
+description = "UniFFI bindings for quies-core — Swift (iOS) and Kotlin (Android)."
+
+[lib]
+crate-type = ["staticlib", "cdylib", "rlib"]
+name = "quies_core_ffi"
+
+[dependencies]
+quies-core = { path = "../core" }
+uniffi = "0.28"
+base64 = "0.22"
+sha1 = "0.10"
+thiserror = "1.0"
+serde_json = "1.0"
+
+[build-dependencies]
+uniffi = { version = "0.28", features = ["build"] }
