@@ -4,4 +4,4 @@ members = [
     "core",
     "core-wasm",
     "core-ffi",
-] 
+]
