@@ -29,10 +29,6 @@ impl Key {
     fn as_array(&self) -> &[u8; 32] {
         &self.0
     }
-
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
-    }
 }
 
 pub fn generate_salt() -> Result<[u8; 16], CoreError> {
@@ -90,16 +86,6 @@ pub fn decrypt(key: &Key, ciphertext: &[u8], aad: &[u8]) -> Result<Vec<u8>, Core
     cipher
         .decrypt(nonce, Payload { msg: ct, aad })
         .map_err(|_| CoreError::DecryptionFailed)
-}
-
-pub fn encrypt_raw(key_bytes: &[u8; 32], plaintext: &[u8], aad: &[u8]) -> Result<Vec<u8>, CoreError> {
-    let key = Key(Box::new(*key_bytes));
-    encrypt(&key, plaintext, aad)
-}
-
-pub fn decrypt_raw(key_bytes: &[u8; 32], ciphertext: &[u8], aad: &[u8]) -> Result<Vec<u8>, CoreError> {
-    let key = Key(Box::new(*key_bytes));
-    decrypt(&key, ciphertext, aad)
 }
 
 #[cfg(test)]

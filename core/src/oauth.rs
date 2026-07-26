@@ -22,7 +22,7 @@ pub struct PkcePair {
     pub code_challenge: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct HttpRequestSpec {
     pub url: String,
     pub method: String,
@@ -36,8 +36,11 @@ pub fn generate_pkce() -> Result<PkcePair, CoreError> {
         .map_err(|_| CoreError::InvalidFormat("failed to generate random PKCE bytes".into()))?;
 
     let verifier = base64_url_encode(&bytes);
-    use sha1::Digest;
-    let mut hasher = sha1::Sha1::new();
+    // RFC 7636 S256 is SHA-256, not SHA-1 — must match the
+    // `code_challenge_method=S256` sent in build_auth_url below, or every
+    // provider's token exchange will reject the code.
+    use sha2::Digest;
+    let mut hasher = sha2::Sha256::new();
     hasher.update(verifier.as_bytes());
     let hash = hasher.finalize();
     let challenge = base64_url_encode(&hash);
@@ -46,6 +49,16 @@ pub fn generate_pkce() -> Result<PkcePair, CoreError> {
         code_verifier: verifier,
         code_challenge: challenge,
     })
+}
+
+/// A random, unpredictable value the caller must persist alongside the pending
+/// auth request and verify against the `state` returned by the provider's
+/// redirect, to prevent OAuth login/account-linking CSRF.
+pub fn generate_oauth_state() -> Result<String, CoreError> {
+    let mut bytes = [0u8; 32];
+    getrandom::getrandom(&mut bytes)
+        .map_err(|_| CoreError::InvalidFormat("failed to generate random state".into()))?;
+    Ok(base64_url_encode(&bytes))
 }
 
 fn base64_url_encode(input: &[u8]) -> String {
@@ -70,24 +83,48 @@ fn base64_url_encode(input: &[u8]) -> String {
     out
 }
 
+/// Percent-encodes a value used in a URL query or an
+/// `application/x-www-form-urlencoded` body. Only RFC 3986 unreserved bytes
+/// are emitted verbatim, so caller-provided values cannot add query/form
+/// parameters or change their meaning.
+pub(crate) fn percent_encode(value: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut encoded = String::with_capacity(value.len());
+    for &byte in value.as_bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(byte as char);
+        } else {
+            encoded.push('%');
+            encoded.push(HEX[(byte >> 4) as usize] as char);
+            encoded.push(HEX[(byte & 0x0F) as usize] as char);
+        }
+    }
+    encoded
+}
+
 pub fn build_auth_url(
     provider: OAuthProvider,
     client_id: &str,
     redirect_uri: &str,
     pkce: &PkcePair,
+    state: &str,
 ) -> String {
+    let client_id = percent_encode(client_id);
+    let redirect_uri = percent_encode(redirect_uri);
+    let challenge = percent_encode(&pkce.code_challenge);
+    let state = percent_encode(state);
     match provider {
         OAuthProvider::GoogleDrive => format!(
-            "https://accounts.google.com/o/oauth2/v2/auth?response_type=code&client_id={}&redirect_uri={}&scope=https://www.googleapis.com/auth/drive.file&code_challenge={}&code_challenge_method=S256",
-            client_id, redirect_uri, pkce.code_challenge
+            "https://accounts.google.com/o/oauth2/v2/auth?response_type=code&client_id={}&redirect_uri={}&scope=https://www.googleapis.com/auth/drive.file&code_challenge={}&code_challenge_method=S256&state={}",
+            client_id, redirect_uri, challenge, state
         ),
         OAuthProvider::Dropbox => format!(
-            "https://www.dropbox.com/oauth2/authorize?response_type=code&client_id={}&redirect_uri={}&code_challenge={}&code_challenge_method=S256",
-            client_id, redirect_uri, pkce.code_challenge
+            "https://www.dropbox.com/oauth2/authorize?response_type=code&client_id={}&redirect_uri={}&code_challenge={}&code_challenge_method=S256&state={}",
+            client_id, redirect_uri, challenge, state
         ),
         OAuthProvider::OneDrive => format!(
-            "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?response_type=code&client_id={}&redirect_uri={}&scope=files.readwrite%20offline_access&code_challenge={}&code_challenge_method=S256",
-            client_id, redirect_uri, pkce.code_challenge
+            "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?response_type=code&client_id={}&redirect_uri={}&scope=files.readwrite%20offline_access&code_challenge={}&code_challenge_method=S256&state={}",
+            client_id, redirect_uri, challenge, state
         ),
     }
 }
@@ -101,7 +138,10 @@ pub fn build_token_exchange_request(
 ) -> HttpRequestSpec {
     let body_str = format!(
         "grant_type=authorization_code&client_id={}&code={}&redirect_uri={}&code_verifier={}",
-        client_id, code, redirect_uri, verifier
+        percent_encode(client_id),
+        percent_encode(code),
+        percent_encode(redirect_uri),
+        percent_encode(verifier)
     );
     HttpRequestSpec {
         url: token_url.to_string(),
@@ -151,9 +191,53 @@ mod tests {
     #[test]
     fn test_pkce_and_auth_url() {
         let pkce = generate_pkce().unwrap();
-        let url = build_auth_url(OAuthProvider::GoogleDrive, "client123", "http://localhost", &pkce);
+        let state = generate_oauth_state().unwrap();
+        let url = build_auth_url(OAuthProvider::GoogleDrive, "client123", "http://localhost", &pkce, &state);
         assert!(url.contains("client123"));
         assert!(url.contains(&pkce.code_challenge));
+        assert!(url.contains(&state));
+    }
+
+    #[test]
+    fn test_pkce_challenge_is_sha256_of_verifier() {
+        // Regression test for the SHA-1/S256 mismatch: the challenge must be
+        // derivable from the verifier via SHA-256, matching what build_auth_url
+        // advertises as code_challenge_method=S256.
+        use sha2::Digest;
+        let pkce = generate_pkce().unwrap();
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(pkce.code_verifier.as_bytes());
+        let expected = super::base64_url_encode(&hasher.finalize());
+        assert_eq!(pkce.code_challenge, expected);
+    }
+
+    #[test]
+    fn oauth_request_values_are_percent_encoded() {
+        let pkce = PkcePair {
+            code_verifier: "verifier&part".into(),
+            code_challenge: "challenge+part".into(),
+        };
+        let url = build_auth_url(
+            OAuthProvider::Dropbox,
+            "client&other=value",
+            "com.quies:/callback?source=app&next=1",
+            &pkce,
+            "state&other=value",
+        );
+        assert!(url.contains("client_id=client%26other%3Dvalue"));
+        assert!(url.contains("redirect_uri=com.quies%3A%2Fcallback%3Fsource%3Dapp%26next%3D1"));
+        assert!(url.contains("code_challenge=challenge%2Bpart"));
+        assert!(url.contains("state=state%26other%3Dvalue"));
+
+        let request = build_token_exchange_request(
+            "https://provider.example/token",
+            "client&other=value",
+            "code&other=value",
+            "com.quies:/callback?source=app&next=1",
+            &pkce.code_verifier,
+        );
+        let body = String::from_utf8(request.body).unwrap();
+        assert_eq!(body, "grant_type=authorization_code&client_id=client%26other%3Dvalue&code=code%26other%3Dvalue&redirect_uri=com.quies%3A%2Fcallback%3Fsource%3Dapp%26next%3D1&code_verifier=verifier%26part");
     }
 
     #[test]

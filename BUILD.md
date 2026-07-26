@@ -15,24 +15,24 @@ The shell (desktop/mobile/extension) MUST:
 - Never handle crypto directly — always call core
 - Wipe the key from memory on lock/timeout
 
-**Read this before building anything:** `core-wasm` and `core-ffi` currently return the raw 32-byte
-vault key to the caller as a base64 string (`wasm_create_vault`, `wasm_unlock_vault`, `create_vault`,
-`unlock_vault`), and every subsequent `encrypt`/`decrypt` call on those bindings takes the key back in
-as a string argument. That contradicts the Core Rule above for any shell built on WASM or UniFFI: a
-JS/Swift/Kotlin string cannot be reliably zeroized, so "wipe the key from memory on lock" is not
-actually achievable for the **browser extension**, **iOS**, or **Android** targets as the bindings
-exist today. See `AUDIT.md` §1 for the full analysis.
+**Update (post-audit fix):** `core-wasm` and `core-ffi` used to return the raw 32-byte vault key to
+the caller as a base64 string (`wasm_create_vault`, `wasm_unlock_vault`, `create_vault`,
+`unlock_vault`), with every subsequent `encrypt`/`decrypt` call taking the key back in as a string
+argument. That contradicted the Core Rule above for any shell built on WASM or UniFFI, since a
+JS/Swift/Kotlin string cannot be reliably zeroized. See `QUIES_AUDIT_FINDINGS.md` [HIGH] for the full
+analysis. This has been fixed: `create_vault`/`unlock_vault`/`wasm_create_vault`/`wasm_unlock_vault`
+now return an opaque `u64` handle instead of a key. The `Vault` (and its private, zeroize-on-drop
+`Key`) lives entirely inside a Rust-owned registry in `core-wasm`/`core-ffi` and is never serialized
+out. Use `vault_encrypt`/`vault_decrypt`/`vault_decrypt_entry`/`vault_put_entry`
+(`wasm_vault_encrypt`/etc. on the WASM side) with the handle, and call `lock_vault`/`wasm_lock_vault`
+on lock/timeout to drop the entry and zeroize the key. This is a breaking API change from the
+pre-audit version — any existing shell code calling the old `key_b64`-based functions needs updating
+to pass a handle instead.
 
-- **Tauri desktop** is unaffected — `src-tauri` links `quies-core` directly as a native Rust
-  dependency and can keep the opaque `Vault` (with its private, zeroize-on-drop `Key`) inside Rust
-  app state for the whole session, exactly as the Core Rule requires. Build this one first.
-- **Extension / iOS / Android**: either (a) fix `core-wasm`/`core-ffi` first so they hold the `Vault`
-  behind an opaque handle and expose `encrypt`/`decrypt`/`decrypt_entry`-style calls instead of the raw
-  key, or (b) proceed with the current API and treat the exported key string as a known, documented
-  risk — do not proceed silently. If you choose (b), at minimum: never write `key_b64` to
-  `localStorage`/`chrome.storage`/on-disk keychains, overwrite the string's backing buffer where the
-  platform allows it, and keep its lifetime as short as possible (re-derive per operation rather than
-  holding it for the whole unlocked session, if that trade-off is acceptable for your target).
+- **Tauri desktop** is unaffected either way — `src-tauri` links `quies-core` directly as a native
+  Rust dependency and already kept the opaque `Vault` inside Rust app state for the whole session.
+- **Extension / iOS / Android** now get the same guarantee via the handle registry: the key never
+  exists as a JS/Swift/Kotlin value at all, so there's nothing for those runtimes to fail to zeroize.
 
 ---
 
@@ -155,26 +155,29 @@ check_strength(password: &str) -> u8  // 0=very weak 1=weak 2=ok 3=strong 4=very
 
 generate_totp(secret_base32: &str, time_step: u64, current_unix_time: u64, digits: u32)
   -> Result<String, CoreError>
-// time_step must be > 0 and digits should stay in the conventional 6-8 range —
-// the core does not currently clamp either (see AUDIT.md §7). Validate in the shell for now.
+// FIXED: core now rejects time_step == 0 and digits outside 6-8 with CoreError::InvalidFormat.
+// No shell-side clamping needed anymore.
 
 // --- Sync ---
 merge(local: &Index, remote: &Index) -> MergeResult
 // MergeResult { to_upload_entries: Vec<String>, to_download_entries: Vec<String>, merged_index: Index }
 // merge() does NOT save its result — the shell must encrypt merged_index and write it to disk.
-// merge() also does not authenticate the remote index — see AUDIT.md §8 before wiring up a
-// storage backend you don't fully trust.
+// merge() still does not authenticate the remote index (accepted limitation of the no-server
+// trust model — see QUIES_AUDIT_FINDINGS.md [MEDIUM]). A malicious remote can still force a
+// stale/rollback entry to "win" via an inflated updated_at.
 
 // --- OAuth PKCE + token handling (for cloud sync auth) ---
 generate_pkce() -> Result<PkcePair, CoreError>
 // PkcePair { code_verifier: String, code_challenge: String }
-// NOTE: code_challenge is currently computed with SHA-1 while build_auth_url() advertises
-// S256 (RFC 7636 requires SHA-256). Confirm this is fixed in core before shipping OAuth sync —
-// see AUDIT.md §9. Do not silently rely on it.
+// FIXED: code_challenge is now SHA-256, matching the S256 build_auth_url() advertises.
 
-build_auth_url(provider: OAuthProvider, client_id: &str, redirect_uri: &str, pkce: &PkcePair) -> String
-// OAuthProvider is GoogleDrive | Dropbox | OneDrive. No `state` param is included yet — the
-// shell must generate and verify its own CSRF state token around this call until core adds one.
+generate_oauth_state() -> Result<String, CoreError>
+// NEW: random CSRF state token. Generate one alongside the PKCE pair, persist it with the
+// pending auth request, and verify it against the provider's redirect before exchanging the code.
+
+build_auth_url(provider: OAuthProvider, client_id: &str, redirect_uri: &str, pkce: &PkcePair, state: &str) -> String
+// OAuthProvider is GoogleDrive | Dropbox | OneDrive. `state` is now a required parameter —
+// pass the value from generate_oauth_state().
 
 build_token_exchange_request(token_url: &str, client_id: &str, code: &str, redirect_uri: &str, verifier: &str)
   -> HttpRequestSpec
@@ -449,11 +452,11 @@ cargo tauri build
 
 ## Browser Extension (Chromium first, then Firefox)
 
-Not present in this repository snapshot — build from scratch against `core-wasm`. Re-read the **Core
-Rule** note above before starting: every unlock call returns the raw key as a base64 string, and this
-extension shell will need to hold onto it in the service worker's memory for the session. Do not persist
-`key_b64` to `chrome.storage.local`/`.sync` under any circumstances — those are plaintext-on-disk from
-the extension's perspective.
+Not present in this repository snapshot — build from scratch against `core-wasm`. Unlock now returns
+an opaque `u64` handle (`wasm_create_vault`/`wasm_unlock_vault`), not a key — hold the handle in the
+service worker's memory for the session and call `wasm_lock_vault(handle)` on lock/timeout. There is
+no key material to leak into `chrome.storage.local`/`.sync` anymore; just don't persist the handle
+across a lock (a stale handle is simply invalid, not sensitive, but treat it as session-only regardless).
 
 ### Prerequisites
 ```bash
@@ -522,7 +525,8 @@ function resetLockTimer() {
 }
 
 function lock() {
-  state.keyB64 = null;
+  if (state.handle != null) wasm_lock_vault(state.handle);
+  state.handle = null;
   state.indexJson = null;
   clearTimeout(state.lockTimer);
 }
@@ -531,7 +535,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.type === 'unlock') {
     const result = JSON.parse(wasm_unlock_vault(msg.manifestJson, msg.indexEncB64, msg.password));
     if (result.success) {
-      state.keyB64 = result.data.key_b64;
+      state.handle = result.data.handle;
       state.indexJson = JSON.stringify(result.data.index);
       resetLockTimer();
     }
@@ -884,12 +888,12 @@ storage you trust and control") rather than implying it's authenticated end-to-e
 - Do NOT use `println!` or any logger to print passwords, keys, or decrypted entries
 - Do NOT implement features not listed in the Screens section for v1
 - Do NOT modify `core/`, `core-wasm/`, or `core-ffi/` unless fixing a compilation error or addressing
-  a finding from `AUDIT.md`
+  a finding from `QUIES_AUDIT_FINDINGS.md`
 - Do NOT add a separate "account" system — Quies has no server, no accounts
 - Do NOT use Electron for desktop — use Tauri only
 - Do NOT copy passwords to clipboard without clearing after 30 seconds
-- Do NOT persist `key_b64` (extension/iOS/Android) to any storage API, however tempting for
-  "remember me" style convenience — see Core Rule above
+- Do NOT try to reintroduce a raw exported key (`key_b64`) to "simplify" a shell integration —
+  the whole point of the handle-based API is that no host language ever holds key material
 
 ---
 
@@ -901,7 +905,7 @@ storage you trust and control") rather than implying it's authenticated end-to-e
 | `put_entry` returns two blobs — both must be saved | Save `entry_enc` to `entries/{id}.enc` AND `index_enc` to `index.enc` |
 | `merge()` returns a merged index but does NOT save it | Shell must encrypt and save the result |
 | `Entry.deleted = true` is soft delete | Filter `deleted == false` in all list views |
-| TOTP counter = `unix_time / time_step` | Use system clock in UTC seconds, not milliseconds; never pass `time_step = 0` (core will panic — see AUDIT.md §7) |
+| TOTP counter = `unix_time / time_step` | Use system clock in UTC seconds, not milliseconds. `time_step = 0` and `digits` outside 6-8 are now rejected by core, not a panic risk anymore |
 | Clipboard clear on Android | Use `ClipboardManager` with a 30-second handler |
-| Vault unlock is slow (~0.5s) | Run in background thread, show loading indicator. Note the WASM/FFI bindings currently derive the key twice per unlock (AUDIT.md §1), so budget for ~1s there until that's fixed |
-| `key_b64` from `core-wasm`/`core-ffi` | Treat as sensitive for its entire lifetime; do not log it, do not persist it, minimize how long any variable holds it (see Core Rule) |
+| Vault unlock is slow (~0.5s) | Run in background thread, show loading indicator. The WASM/FFI bindings now derive the key exactly once per unlock (fixed) |
+| Vault handle (`u64`) from `core-wasm`/`core-ffi` | Session-scoped only — call `lock_vault`/`wasm_lock_vault(handle)` on lock/timeout; do not persist it across restarts |

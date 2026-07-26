@@ -1,21 +1,26 @@
 namespace quies {
     [Throws=QuiesError]
-    string generate_salt_b64();
-
-    [Throws=QuiesError]
-    string derive_key_b64(string password, string salt_b64, u32 memory_kib, u32 iterations, u32 parallelism);
-
-    [Throws=QuiesError]
-    string encrypt_b64(string key_b64, bytes plaintext, bytes aad);
-
-    [Throws=QuiesError]
-    bytes decrypt_b64(string key_b64, string ciphertext_b64, bytes aad);
-
-    [Throws=QuiesError]
     CreateVaultResult create_vault(string password);
 
     [Throws=QuiesError]
     UnlockVaultResult unlock_vault(string manifest_json, string index_enc_b64, string password);
+
+    void lock_vault(u64 handle);
+
+    [Throws=QuiesError]
+    string vault_encrypt(u64 handle, bytes plaintext, bytes aad);
+
+    [Throws=QuiesError]
+    bytes vault_decrypt(u64 handle, string ciphertext_b64, bytes aad);
+
+    [Throws=QuiesError]
+    string vault_decrypt_entry(u64 handle, string entry_enc_b64, string entry_id);
+
+    [Throws=QuiesError]
+    PutEntryResult vault_put_entry(u64 handle, string index_json, string entry_json);
+
+    [Throws=QuiesError]
+    RekeyResultFfi vault_rekey(u64 handle, string index_json, sequence<RekeyEntryInputFfi> entries, string new_password);
 
     [Throws=QuiesError]
     string generate_password(u32 length, boolean uppercase, boolean lowercase, boolean numbers, boolean symbols);
@@ -36,6 +41,165 @@ namespace quies {
 
     [Throws=QuiesError]
     PkcePair generate_pkce();
+
+    [Throws=QuiesError]
+    string generate_oauth_state();
+
+    [Throws=QuiesError]
+    string build_auth_url(string provider, string client_id, string redirect_uri, string pkce_json, string state);
+
+    HttpRequestSpecFfi build_token_exchange_request(string token_url, string client_id, string code, string redirect_uri, string verifier);
+
+    [Throws=QuiesError]
+    OAuthTokensFfi parse_token_response(bytes response_body, i64 current_unix_time);
+
+    [Throws=QuiesError]
+    string vault_encrypt_tokens(u64 handle, string tokens_json);
+
+    [Throws=QuiesError]
+    OAuthTokensFfi vault_decrypt_tokens(u64 handle, string ciphertext_b64);
+
+    [Throws=QuiesError]
+    string vault_save_search_cache(u64 handle, string index_json);
+
+    [Throws=QuiesError]
+    string vault_load_search_cache_query(u64 handle, string ciphertext_b64, string term);
+
+    [Throws=QuiesError]
+    string sync_pending_apply(string pending_json, string operation, string id);
+
+    u64 sync_retry_backoff(u32 attempt);
+
+    [Throws=QuiesError]
+    string sync_resolve_conflict(string local_json, string remote_json, string strategy);
+
+    // --- Tags ---
+
+    [Throws=QuiesError]
+    TagResult tags_create(string index_json, string id, string name, i64 now);
+
+    [Throws=QuiesError]
+    string tags_rename(string index_json, string tag_id, string new_name, i64 now);
+
+    [Throws=QuiesError]
+    TagDeleteResult tags_delete(string index_json, string tag_id, i64 now);
+
+    [Throws=QuiesError]
+    string tags_list(string index_json);
+
+    [Throws=QuiesError]
+    string tags_search(string index_json, string tag_id);
+
+    [Throws=QuiesError]
+    EntryTagResult entry_assign_tag(string index_json, string entry_json, string tag_id);
+
+    [Throws=QuiesError]
+    EntryTagResult entry_remove_tag(string entry_json, string tag_id);
+
+    // --- Collections ---
+
+    [Throws=QuiesError]
+    CollectionResult collections_create(string index_json, string id, string name, string? parent_id, i64 now);
+
+    [Throws=QuiesError]
+    string collections_rename(string index_json, string collection_id, string new_name, i64 now);
+
+    [Throws=QuiesError]
+    CollectionDeleteResult collections_delete(string index_json, string collection_id, i64 now);
+
+    [Throws=QuiesError]
+    string collections_list_root(string index_json);
+
+    [Throws=QuiesError]
+    string collections_list_children(string index_json, string parent_id);
+
+    [Throws=QuiesError]
+    string collections_search(string index_json, string collection_id);
+
+    [Throws=QuiesError]
+    string entry_move_to_collection(string entry_json, string? collection_id);
+
+    // --- Favorites ---
+
+    [Throws=QuiesError]
+    string entry_set_favorite(string entry_json, boolean favorite);
+
+    [Throws=QuiesError]
+    string favorites_list(string index_json, FavoriteSortFfi sort);
+
+    [Throws=QuiesError]
+    string favorites_search(string index_json, string term);
+
+    // --- Email alias manager ---
+    //
+    // Request-builder calls never fail; parse_* calls can (malformed/
+    // unexpected response body) and are Throws.
+
+    HttpRequestSpecFfi alias_create_request(AliasProviderKindFfi provider, string api_key, CreateAliasOptionsFfi options);
+
+    [Throws=QuiesError]
+    AliasRecordFfi alias_parse_response(AliasProviderKindFfi provider, bytes response_body);
+
+    HttpRequestSpecFfi alias_delete_request(AliasProviderKindFfi provider, string api_key, string provider_id);
+
+    HttpRequestSpecFfi alias_enable_request(AliasProviderKindFfi provider, string api_key, string provider_id);
+
+    HttpRequestSpecFfi alias_disable_request(AliasProviderKindFfi provider, string api_key, string provider_id);
+
+    HttpRequestSpecFfi alias_list_request(AliasProviderKindFfi provider, string api_key);
+
+    [Throws=QuiesError]
+    sequence<AliasRecordFfi> alias_parse_list_response(AliasProviderKindFfi provider, bytes response_body);
+
+    HttpRequestSpecFfi alias_account_info_request(AliasProviderKindFfi provider, string api_key);
+
+    [Throws=QuiesError]
+    AliasAccountInfoFfi alias_parse_account_info_response(AliasProviderKindFfi provider, bytes response_body);
+
+    // --- Password History ---
+
+    [Throws=QuiesError]
+    string entry_record_password_change(string entry_json, string new_password, i64 now);
+
+    [Throws=QuiesError]
+    string entry_restore_password(string entry_json, u32 history_index, i64 now);
+
+    [Throws=QuiesError]
+    string entry_get_password_history(string entry_json);
+
+    // --- Attachments ---
+
+    [Throws=QuiesError]
+    string vault_encrypt_attachment(u64 handle, string attachment_json, string entry_id);
+
+    [Throws=QuiesError]
+    string vault_decrypt_attachment(u64 handle, string ciphertext_b64, string entry_id, string attachment_id);
+
+    // --- Import / Export ---
+
+    [Throws=QuiesError]
+    string import_bitwarden_json(string json_b64);
+
+    [Throws=QuiesError]
+    string export_bitwarden_json(string entries_json);
+
+    [Throws=QuiesError]
+    string import_csv(string csv_b64);
+
+    [Throws=QuiesError]
+    string export_csv(string entries_json);
+
+    [Throws=QuiesError]
+    string import_1password_csv(string csv_b64);
+
+    [Throws=QuiesError]
+    string import_protonpass_csv(string csv_b64);
+
+    [Throws=QuiesError]
+    string export_1password_csv(string entries_json);
+
+    [Throws=QuiesError]
+    string export_protonpass_csv(string entries_json);
 };
 
 [Error]
@@ -45,17 +209,41 @@ interface QuiesError {
     NotFound(string id);
     UnsupportedVersion(u32 version);
     InvalidFormat(string message);
+    AlreadyExists(string message);
+    InvalidOperation(string message);
 };
 
 dictionary CreateVaultResult {
     string manifest_json;
     string index_enc_b64;
-    string key_b64;
+    u64 handle;
 };
 
 dictionary UnlockVaultResult {
     string index_json;
-    string key_b64;
+    u64 handle;
+};
+
+dictionary PutEntryResult {
+    string entry_enc_b64;
+    string index_enc_b64;
+    string index_json;
+};
+
+dictionary RekeyEntryInputFfi {
+    string id;
+    string entry_enc_b64;
+};
+
+dictionary RekeyEntryOutputFfi {
+    string id;
+    string new_entry_enc_b64;
+};
+
+dictionary RekeyResultFfi {
+    string manifest_json;
+    string index_enc_b64;
+    sequence<RekeyEntryOutputFfi> reencrypted_entries;
 };
 
 dictionary BreachHashParts {
@@ -66,4 +254,75 @@ dictionary BreachHashParts {
 dictionary PkcePair {
     string code_verifier;
     string code_challenge;
+};
+
+dictionary OAuthTokensFfi {
+    string access_token;
+    string? refresh_token;
+    i64? expires_at;
+};
+
+dictionary TagResult {
+    string tag_json;
+    string index_json;
+};
+
+dictionary TagDeleteResult {
+    string index_json;
+    sequence<string> affected_entry_ids;
+};
+
+dictionary EntryTagResult {
+    string entry_json;
+    boolean changed;
+};
+
+dictionary CollectionResult {
+    string collection_json;
+    string index_json;
+};
+
+dictionary CollectionDeleteResult {
+    string index_json;
+    sequence<string> affected_entry_ids;
+};
+
+enum FavoriteSortFfi {
+    "TitleAscending",
+    "RecentlyUpdatedFirst",
+};
+
+enum AliasProviderKindFfi {
+    "AddyIo",
+    "SimpleLogin",
+};
+
+dictionary CreateAliasOptionsFfi {
+    string? local_part;
+    string? domain;
+    string? description;
+};
+
+dictionary AliasRecordFfi {
+    string provider_id;
+    string email;
+    boolean enabled;
+    string? description;
+};
+
+dictionary AliasAccountInfoFfi {
+    string? display_name;
+    i64? quota_remaining;
+};
+
+dictionary HttpHeaderFfi {
+    string name;
+    string value;
+};
+
+dictionary HttpRequestSpecFfi {
+    string url;
+    string method;
+    sequence<HttpHeaderFfi> headers;
+    bytes body;
 };

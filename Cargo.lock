@@ -593,8 +593,8 @@ dependencies = [
  "serde",
  "serde_json",
  "sha1",
+ "sha2",
  "thiserror",
- "uuid",
  "zeroize",
 ]
 
@@ -604,6 +604,7 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "quies-core",
+ "serde",
  "serde_json",
  "sha1",
  "thiserror",
@@ -806,6 +807,17 @@ name = "sha1"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a978451301f4db1d02937a4ab3ccce137717b81826e79b7d49ffe3244a13c3b8"
+dependencies = [
+ "cfg-if",
+ "cpufeatures",
+ "digest",
+]
+
+[[package]]
+name = "sha2"
+version = "0.10.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7507d819769d01a365ab707794a4084392c824f54a7a6a7862f8c3d0892b283"
 dependencies = [
  "cfg-if",
  "cpufeatures",
@@ -1075,17 +1087,6 @@ checksum = "fc1de2c688dc15305988b563c3854064043356019f97a4b46276fe734c4f07ea"
 dependencies = [
  "crypto-common",
  "subtle",
-]
-
-[[package]]
-name = "uuid"
-version = "1.24.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bf3923a6f5c4c6382e0b653c4117f48d631ea17f38ed86e2a828e6f7412f5239"
-dependencies = [
- "getrandom 0.4.3",
- "js-sys",
- "wasm-bindgen",
 ]
 
 [[package]]

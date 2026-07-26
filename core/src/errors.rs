@@ -16,4 +16,10 @@ pub enum CoreError {
 
     #[error("malformed data: {0}")]
     InvalidFormat(String),
+
+    #[error("already exists: {0}")]
+    AlreadyExists(String),
+
+    #[error("invalid operation: {0}")]
+    InvalidOperation(String),
 }
